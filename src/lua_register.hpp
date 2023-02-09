@@ -221,22 +221,11 @@ namespace LuaRegister
      * @return std::tuple<Arg, Args...> @see GetParameter for possible types of
      * \p Arg and \p Args
      */
-    template<typename Arg, typename... Args>
-    auto GetParameters(lua_State* state, int& stackIndex)
+    template<typename... Args>
+    requires(sizeof...(Args) > 0) auto GetParameters(lua_State* state, int& stackIndex)
     {
-        if constexpr(sizeof...(Args) > 0)
-        {
-            // `current` must be set first to preserve the order of fetching from
-            // the stack. Argument order of execution is undefined, so local
-            // variables are required
-            auto current = std::make_tuple(GetParameter<Arg>(state, stackIndex));
-            auto rest = GetParameters<Args...>(state, stackIndex);
-            return std::tuple_cat(current, rest);
-        }
-        else
-        {
-            return std::make_tuple(GetParameter<Arg>(state, stackIndex));
-        }
+        // Initializer list guarantees order of evaluation ?
+        return std::tuple{GetParameter<Args>(state, stackIndex) ...};
     }
 
     template<size_t Index, typename... Types, typename... TupTypes>
