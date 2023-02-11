@@ -225,6 +225,11 @@ namespace LuaRegister
     requires(sizeof...(Args) > 0) auto GetParameters(lua_State* state, int& stackIndex)
     {
         // Initializer list guarantees order of evaluation ?
+
+        // Since GetParameter isn't guaranteed to return the same type as a
+        // single argument, class template argument deduction is a lifesaver
+        // here!
+
         return std::tuple{GetParameter<Args>(state, stackIndex) ...};
     }
 
@@ -337,63 +342,34 @@ namespace LuaRegister
             return retLength + ReturnVals<StackIndex + 1, Types...>(lua, vals);
         }
     }
-
-    /**
-     * @brief Given a tuple that owns all of its values i.e. containing no
-     * pointers or references, returns a tuple which can contain pointers to the
-     * elements of \p tup depending on \p TargetTypes
-     *
-     * For instance:
-     * \code {.cpp}
-     * auto vals = std::make_tuple(123, "Hello", 1.0f, 3);
-     * auto converted = Convert<int*, const char* float, int>(vals);
-     * \endcode
-     * Will create a tuple where index 0 points to vals[0] and index 1 points to
-     * vals[1]. Index 2 and 3 will be copied from vals
-     *
-     * @tparam StackIndex Current stack index. Since this is a recursive
-     * function it will probably only be called with the value 0
-     * @tparam TargetTypes
-     * @tparam TupTypes
-     * @param tup
-     * @return auto
-     */
-    template<size_t StackIndex, typename... TargetTypes, typename... TupTypes>
-    auto Convert(const std::tuple<TupTypes...>& tup)
-    {
-        using T = std::tuple_element_t<StackIndex, std::tuple<TargetTypes...>>;
-        if constexpr(std::is_same_v<T, lua_State*>)
-        {
-            auto lhs = std::make_tuple(std::get<StackIndex>(tup));
-            auto rhs = Convert<StackIndex + 1, TargetTypes...>(tup);
-            return std::tuple_cat(lhs, rhs);
-        }
-        if constexpr(std::is_pointer_v<T> && !std::is_same_v<const char*, T>)
-        {
-            auto lhs = std::make_tuple((T)&std::get<StackIndex>(tup));
-            if constexpr(StackIndex + 1 == sizeof...(TargetTypes))
-            {
-                return lhs;
-            }
-            else
-            {
-                auto rhs = Convert<StackIndex + 1, TargetTypes...>(tup);
-                return std::tuple_cat(lhs, rhs);
-            }
-        }
+    
+    template<typename TargetType, typename T>
+    auto ReferenceValue(T& val) {
+        if constexpr(std::is_same_v<TargetType, lua_State*>)
+            return val;
+        else if constexpr(std::is_pointer_v<TargetType> && !std::is_same_v<const char*, TargetType>)
+            return (TargetType)&val;
         else
-        {
-            auto lhs = std::make_tuple(std::get<StackIndex>(tup));
-            if constexpr(StackIndex + 1 == sizeof...(TargetTypes))
-            {
-                return lhs;
-            }
-            else
-            {
-                auto rhs = Convert<StackIndex + 1, TargetTypes...>(tup);
-                return std::tuple_cat(lhs, rhs);
-            }
-        }
+            return val;
+    }
+
+    // std::array is used by GetParameter and should be handled in a type-safe way
+    template<typename TargetType, typename T, std::size_t Size>
+    auto ReferenceValue(std::array<T, Size>& val) {
+        if constexpr(std::is_pointer_v<TargetType> && !std::is_same_v<const char*, TargetType>)
+            return val.data();
+        else
+            static_assert(always_false<T>);
+    }
+
+    template<typename... TargetTypes, typename... TupleTypes, std::size_t... I>
+    auto ReferenceValuesImpl(std::tuple<TupleTypes...>& tuple, std::index_sequence<I...>) {
+        return std::tuple{ReferenceValue<TargetTypes>(std::get<I>(tuple)) ...};
+    }
+
+    template<typename... TargetTypes, typename... TupleTypes>
+    auto ReferenceValues(std::tuple<TupleTypes...>& tuple) {
+        return ReferenceValuesImpl<TargetTypes...>(tuple, std::make_index_sequence<std::tuple_size_v<std::tuple<TupleTypes...>>>{});
     }
 
     /**
@@ -437,20 +413,12 @@ namespace LuaRegister
     template<typename R, typename... Args>
     requires(sizeof...(Args) > 0) int LuaWrapper(lua_State* lua)
     {
-        // `arg` needs to be a local variable so it can be passed to GetParameters -
-        // which takes a reference
-        // Keeps track of which stack index to fetch the next parameter from
-        int arg = 1;
-        // If a function takes a constant reference one of the types in Args
-        // will be a const reference, but the tuple must own the value so the
-        // parameter can be passed as a reference
-        auto tup = GetParameters<std::remove_cvref_t<Args>...>(lua, arg);
-        // std::apply will not automatically convert owned types to pointers, so
-        // a function that takes a float* must be called with a
-        // `std::tuple<float*>` and not `std::tuple<float>`. Convert performs
-        // this conversion. Any pointers in `tup2` (name will be changed) will
-        // point to members in `tup`, so `tup` needs to stick around
-        auto tup2 = Convert<0, Args...>(tup);
+        // Keeps track of which stack index to fetch the next parameter from,
+        // needs to be a local variable since GetParameter takes a reference
+        int stackIndex = 1;
+        // The tuple must own all its values, so it cannot contain const refs
+        std::tuple ownedArguments{GetParameter<std::remove_cvref_t<Args>>(lua, stackIndex) ...};
+        std::tuple functionArguments = ReferenceValues<Args...>(ownedArguments);
 
         int retCount = 0;
         // Call supplied function, since the types R and Args are known the cast
@@ -460,16 +428,16 @@ namespace LuaRegister
         auto f = (R(*)(Args...))lua_touserdata(lua, lua_upvalueindex(1));
         if constexpr(!std::is_same_v<R, void>)
         {
-            R res = std::apply(f, tup2);
+            R res = std::apply(f, functionArguments);
             LuaSetFunc<R>(lua, res);
             retCount++;
         }
         else
         {
-            std::apply(f, tup2);
+            std::apply(f, functionArguments);
         }
 
-        retCount += ReturnVals<0, Args...>(lua, tup);
+        retCount += ReturnVals<0, Args...>(lua, ownedArguments);
 
         // It is also assumed only one return value is required, which also
         // doesn't really hold up since some functions use pointers to "return"
@@ -551,27 +519,27 @@ namespace LuaRegister
     template<typename T, typename R, typename... Args>
     requires(sizeof...(Args) > 0) int LuaWrapperMember(lua_State* lua)
     {
-        int arg = 1;
-        auto tup = GetParameters<std::remove_cvref_t<Args>...>(lua, arg);
-        auto tup2 = Convert<0, Args...>(tup);
+        // int arg = 1;
+        // auto tup = GetParameters<std::remove_cvref_t<Args>...>(lua, arg);
+        // auto tup2 = Convert(tup);
 
-        int retCount = 0;
-        auto f = (R(*)(T, Args...))lua_touserdata(lua, lua_upvalueindex(1));
-        T instance = (T)lua_touserdata(lua, lua_upvalueindex(2));
-        auto tup3 = std::tuple_cat(std::make_tuple(instance), tup2);
-        if constexpr(!std::is_same_v<R, void>)
-        {
-            R res = std::apply(f, tup3);
-            LuaSetFunc<R>(lua, res);
-            retCount++;
-        }
-        else
-        {
-            std::apply(f, tup3);
-        }
+        // int retCount = 0;
+        // auto f = (R(*)(T, Args...))lua_touserdata(lua, lua_upvalueindex(1));
+        // T instance = (T)lua_touserdata(lua, lua_upvalueindex(2));
+        // auto tup3 = std::tuple_cat(std::make_tuple(instance), tup2);
+        // if constexpr(!std::is_same_v<R, void>)
+        // {
+        //     R res = std::apply(f, tup3);
+        //     LuaSetFunc<R>(lua, res);
+        //     retCount++;
+        // }
+        // else
+        // {
+        //     std::apply(f, tup3);
+        // }
 
-        retCount += ReturnVals<0, Args...>(lua, tup);
-        return retCount;
+        // retCount += ReturnVals<0, Args...>(lua, tup);
+        // return retCount;
     }
 
     /**
