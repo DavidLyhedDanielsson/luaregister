@@ -240,7 +240,7 @@ namespace LuaRegister
     }
 
     /**
-     * @brief Given a lua stack index, a paramter pack of types, and a tuple,
+     * @brief Given a lua stack index, a parameter pack of types, and a tuple,
      * returns values from \p vals that should be returned to lua based on the
      * types of \p Types
      *
