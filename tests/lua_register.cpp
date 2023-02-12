@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
-#include <limits>
 #include <cstring>
+#include <limits>
 #include <string_view>
 
 #include "../src/lua_register.hpp"
