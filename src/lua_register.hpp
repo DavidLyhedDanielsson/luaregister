@@ -447,27 +447,29 @@ namespace LuaRegister
     template<typename T, typename R, typename... Args>
     requires(sizeof...(Args) > 0) int LuaWrapperMember(lua_State* lua)
     {
-        // int arg = 1;
-        // auto tup = GetParameters<std::remove_cvref_t<Args>...>(lua, arg);
-        // auto tup2 = Convert(tup);
 
-        // int retCount = 0;
-        // auto f = (R(*)(T, Args...))lua_touserdata(lua, lua_upvalueindex(1));
-        // T instance = (T)lua_touserdata(lua, lua_upvalueindex(2));
-        // auto tup3 = std::tuple_cat(std::make_tuple(instance), tup2);
-        // if constexpr(!std::is_same_v<R, void>)
-        // {
-        //     R res = std::apply(f, tup3);
-        //     LuaSetFunc<R>(lua, res);
-        //     retCount++;
-        // }
-        // else
-        // {
-        //     std::apply(f, tup3);
-        // }
+        int stackIndex = 1;
+        std::tuple ownedArguments{GetParameter<std::remove_cvref_t<Args>>(lua, stackIndex) ...};
+        std::tuple functionArgumentsWithoutInstance = ReferenceValues<Args...>(ownedArguments);
 
-        // retCount += ReturnVals<0, Args...>(lua, tup);
-        // return retCount;
+        int retCount = 0;
+        auto f = (R(*)(T, Args...))lua_touserdata(lua, lua_upvalueindex(1));
+        T instance = (T)lua_touserdata(lua, lua_upvalueindex(2));
+        auto functionArguments = std::tuple_cat(std::make_tuple(instance), functionArgumentsWithoutInstance);
+        if constexpr(!std::is_same_v<R, void>)
+        {
+            R res = std::apply(f, functionArguments);
+            LuaSetFunc<R>(lua, res);
+            retCount++;
+        }
+        else
+        {
+            std::apply(f, functionArguments);
+        }
+
+        retCount += PushReturnValues<Args...>(lua, ownedArguments);
+
+        return retCount;
     }
 
     /**
