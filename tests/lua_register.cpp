@@ -1,5 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
+#include <cstring>
+#include <string_view>
 
 #include "../src/lua_register.hpp"
 
@@ -16,7 +18,7 @@
 #define REQUIRE_TABLE REQUIRE(lua_istable(lua, -1));
 
 #define REQUIRE_NUMBER_VALUE(val) REQUIRE(lua_tonumber(lua, -1) == val);
-#define REQUIRE_STRING_VALUE(val) REQUIRE(strcmp(lua_tostring(lua, -1), val) == 0);
+#define REQUIRE_STRING_VALUE(val) REQUIRE(std::string_view(lua_tostring(lua, -1)) == val);
 
 const char* funcName = "funcName";
 
@@ -37,7 +39,7 @@ TEST_CASE("Register arguments", "[Function registration]")
         static bool called = false;
         QuickRegister(+[](const char* arg) {
             called = true;
-            REQUIRE(strcmp(arg, "It works!") == 0);
+            REQUIRE(std::string_view(arg) == "It works!");
         });
 
         QuickRun(R"###(funcName("It works!"))###");
@@ -58,11 +60,11 @@ TEST_CASE("Register arguments", "[Function registration]")
 
     PrimitiveTest(int, -123, -123);
     PrimitiveTest(unsigned int, 123, 123);
-    PrimitiveTest(long, -123, -123);
-    PrimitiveTest(unsigned long, 123, 123);
-    PrimitiveTest(long long, -123, -123);
-    PrimitiveTest(float, 123.4f, 123.4);
-    PrimitiveTest(double, 123.4, 123.4);
+    PrimitiveTest(long, -12345, -12345);
+    PrimitiveTest(unsigned long, 12345, 12345);
+    PrimitiveTest(long long, -1234567, -1234567);
+    PrimitiveTest(float, 123.4f, 123.4); // Lua floats don't use f
+    PrimitiveTest(double, 123.456, 123.456);
     PrimitiveTest(bool, true, true);
     PrimitiveTest(bool, false, 1 == 2);
 
@@ -71,7 +73,7 @@ TEST_CASE("Register arguments", "[Function registration]")
         static bool called = false;
         QuickRegister(+[](const char* arg, int i, float f, bool b) {
             called = true;
-            REQUIRE(strcmp(arg, "It works!") == 0);
+            REQUIRE(std::string_view(arg) == "It works!");
             REQUIRE(i == 123);
             REQUIRE(f == 1.23f);
             REQUIRE(b == true);
@@ -104,9 +106,9 @@ TEST_CASE("Register return values", "[Function registration]")
 
     PrimitiveTest(int, -123, -123, lua_tointeger);
     PrimitiveTest(unsigned int, 123, 123, lua_tointeger);
-    PrimitiveTest(long, -123, -123, lua_tointeger);
-    PrimitiveTest(unsigned long, 123, 123, lua_tointeger);
-    PrimitiveTest(long long, -123, -123, lua_tointeger);
+    PrimitiveTest(long, -12345, -12345, lua_tointeger);
+    PrimitiveTest(unsigned long, 12345, 12345, lua_tointeger);
+    PrimitiveTest(long long, -1234567, -1234567, lua_tointeger);
     PrimitiveTest(float, 123.4f, 123.4f, lua_tonumber);
     PrimitiveTest(double, 123.4, 123.4, lua_tonumber);
     PrimitiveTest(bool, true, true, lua_toboolean);
