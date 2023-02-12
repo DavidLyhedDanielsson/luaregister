@@ -3,6 +3,12 @@
 Expose C-functions to lua using a single function call which wraps the given
 function and automatically manages the lua stack.
 
+### Primary goals
+- Utilize template and parameter packs to deduce function signature - the API
+  should be able to be used without passing types
+- Avoid recursive templates and unnecessary code generation
+- Avoid (or enable opt-in) dynamic memory allocation
+
 ## Requirements
 C++20 for lua_register.hpp. Catch2 and lua 5.3 for the tests
 
