@@ -233,114 +233,42 @@ namespace LuaRegister
         return std::tuple{GetParameter<Args>(state, stackIndex) ...};
     }
 
-    template<size_t Index, typename... Types, typename... TupTypes>
-    requires(Index == sizeof...(Types)) int ReturnVals(lua_State*, const std::tuple<TupTypes...>&)
-    {
-        return 0;
+    template<typename ReturnType, typename T>
+    void PushOneReturnValue(lua_State* lua, T& val, const int stackIndex, int& returnValueCount) {
+        // Not a pointer or constant, then the value can't be changed by the
+        // function
+        if constexpr(!std::is_pointer_v<ReturnType> || is_const_pointer_v<ReturnType>)
+            return;
+        else {
+            using U = std::remove_pointer_t<std::remove_reference_t<ReturnType>>;
+            if(lua_istable(lua, stackIndex)) // +1 ?
+            {
+                int len = luaL_len(lua, stackIndex);
+                lua_createtable(lua, len, 0);
+                for(int i = 0; i < len; ++i)
+                {
+                    lua_pushnumber(lua, i + 1);
+                    LuaSetFunc<U>(lua, val.at(i));
+                    lua_settable(lua, -3);
+                }
+            }
+            else
+                LuaSetFunc<U>(lua, val.at(0));
+
+            returnValueCount += 1;
+        }
     }
 
-    /**
-     * @brief Given a lua stack index, a parameter pack of types, and a tuple,
-     * returns values from \p vals that should be returned to lua based on the
-     * types of \p Types
-     *
-     * For instance:
-     * \code{.cpp}
-     * auto vals = std::make_tuple(1, 2, "Hello", Vector2{ 1.0f, 2.0f }, 3);
-     * ReturnVals<int, int*, const char*, Vector2, const int*>(lua, vals);
-     * \endcode
-     *
-     * Will push the int \p 2, the string \p Hello and type \p Vector2
-     *
-     * Note that \p 3 is not pushed since it is a const int*, and should not be
-     * returned to lua since it will not be modified by C++
-     *
-     * @tparam StackIndex Current stack index. Since this is a recursive
-     * function it will probably only be called with the value 0
-     * @tparam Types
-     * @tparam TupTypes
-     * @param vals
-     */
-    template<size_t StackIndex, typename... Types, typename... TupTypes>
-    requires(StackIndex < sizeof...(Types)) int ReturnVals(
-        lua_State* lua,
-        const std::tuple<TupTypes...>& vals)
-    {
-        using T = std::tuple_element_t<StackIndex, std::tuple<Types...>>;
-        if constexpr(!std::is_pointer_v<T> || is_const_pointer_v<T>)
-        {
-            return 0 + ReturnVals<StackIndex + 1, Types...>(lua, vals);
-        }
-        else
-        {
-            using U = std::remove_pointer_t<std::remove_reference_t<T>>;
-            int retLength = 0;
-            if constexpr(std::is_same_v<U, float>)
-            {
-                if(lua_istable(lua, StackIndex + 1))
-                {
-                    int len = luaL_len(lua, StackIndex + 1);
-                    lua_createtable(lua, len, 0);
-                    for(int i = 0; i < len; ++i)
-                    {
-                        lua_pushnumber(lua, i + 1);
-                        auto val = std::get<StackIndex>(vals).at(i);
-                        lua_pushnumber(lua, val);
-                        lua_settable(lua, -3);
-                    }
-                }
-                else
-                {
-                    lua_pushnumber(lua, std::get<StackIndex>(vals).at(0));
-                }
-                retLength = 1;
-            }
-            else if constexpr(std::is_same_v<U, bool>)
-            {
-                if(lua_istable(lua, StackIndex + 1))
-                {
-                    int len = luaL_len(lua, StackIndex + 1);
-                    lua_createtable(lua, len, 0);
-                    for(int i = 0; i < len; ++i)
-                    {
-                        lua_pushnumber(lua, i + 1);
-                        auto val = std::get<StackIndex>(vals).at(i);
-                        lua_pushboolean(lua, val);
-                        lua_settable(lua, -3);
-                    }
-                }
-                else
-                {
-                    lua_pushboolean(lua, std::get<StackIndex>(vals).at(0));
-                }
-                retLength = 1;
-            }
-            else if constexpr(is_any_v<U, int, long unsigned int>)
-            {
-                if(lua_istable(lua, StackIndex + 1))
-                {
-                    int len = luaL_len(lua, StackIndex + 1);
-                    lua_createtable(lua, len, 0);
-                    for(int i = 0; i < len; ++i)
-                    {
-                        lua_pushnumber(lua, i + 1);
-                        auto val = std::get<StackIndex>(vals).at(i);
-                        lua_pushinteger(lua, val);
-                        lua_settable(lua, -3);
-                    }
-                }
-                else
-                {
-                    lua_pushinteger(lua, std::get<StackIndex>(vals).at(0));
-                }
-                retLength = 1;
-            }
-            // Do nothing if T is of type lua_State* or Placeholder
-            else if constexpr(!is_any_v<T, lua_State*, Placeholder>)
-                static_assert(always_false<T>);
+    template<typename... Types, typename... TupleTypes, std::size_t... I>
+    void PushReturnValuesImpl(lua_State* luaState, std::tuple<TupleTypes...>& tuple, std::index_sequence<I...>, int& returnValueCount) {
+        (..., PushOneReturnValue<Types>(luaState, std::get<I>(tuple), I + 1, returnValueCount));
+    }
 
-            return retLength + ReturnVals<StackIndex + 1, Types...>(lua, vals);
-        }
+    template<typename... Types, typename... TupleTypes>
+    int PushReturnValues(lua_State* luaState, std::tuple<TupleTypes...>& tuple) {
+        int returnValueCount = 0;
+        PushReturnValuesImpl<Types...>(luaState, tuple, std::make_index_sequence<std::tuple_size_v<std::tuple<TupleTypes...>>>{}, returnValueCount);
+        return returnValueCount;
     }
     
     template<typename TargetType, typename T>
@@ -437,7 +365,7 @@ namespace LuaRegister
             std::apply(f, functionArguments);
         }
 
-        retCount += ReturnVals<0, Args...>(lua, ownedArguments);
+        retCount += PushReturnValues<Args...>(lua, ownedArguments);
 
         // It is also assumed only one return value is required, which also
         // doesn't really hold up since some functions use pointers to "return"
