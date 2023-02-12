@@ -18,8 +18,12 @@ namespace LuaRegister
     // string arguments
     constexpr int STRING_BUFFER_LENGTH = 256;
 
-    // Used when calling `Register` to indicate that all parameters including
-    // and after this parameter are variadic
+    /**
+     * @brief Used when calling `Register` to indicate that all parameters
+     * including, and after, this parameter are variadic
+     *
+     * @tparam T
+     */
     template<typename T>
     struct Variadic
     {
@@ -52,8 +56,12 @@ namespace LuaRegister
         }
     };
 
-    // Used when calling 'Register' to indicate that this parameter should be
-    // ignored. It will instead contain the stack index of this parameter
+    /**
+     * @brief Used when calling 'Register' to indicate that this parameter
+     * should be ignored; it will instead contain the stack index of this
+     * parameter
+     *
+     */
     struct Placeholder
     {
         lua_Integer stackIndex;
@@ -65,15 +73,16 @@ namespace LuaRegister
     template<typename T> struct is_variadic<Variadic<T>>: std::true_type {};
     template<typename T, typename... Other> struct is_any: std::bool_constant<(std::is_same_v<T, Other> || ...)> {};
     template<typename T, typename... Other> inline constexpr bool is_any_v = is_any<T, Other...>::value;
-    // Does not actually check for a T const*, but for a const T*
+    // Does not actually check for a `T const*`, but for a `const T*`
     template<typename T> bool constexpr is_const_pointer_v = std::is_const_v<std::remove_pointer_t<T>>;
 
     // https://stackoverflow.com/questions/53945490/how-to-assert-that-a-constexpr-if-else-clause-never-happen
     template<class...>
     constexpr std::false_type always_false{};
 
-    // Because some lua_toX are macros it cannot be used in the LuaGetFunc
-    // specialization
+    // Because some lua_toX are macros, they cannot be used in the LuaGetFunc
+    // specialization. These are wrappers for the macros, but also for functions
+    // like `to_toboolean` for consistency
     inline lua_Integer luaToInteger(lua_State* lua, int i) { return lua_tointeger(lua, i); }
     inline lua_Number luaToNumber(lua_State* lua, int i) { return lua_tonumber(lua, i); }
     inline int luaToBoolean(lua_State* lua, int i) { return lua_toboolean(lua, i); }
@@ -121,21 +130,21 @@ namespace LuaRegister
     // clang-format on
 
     /**
-     * @brief "Converts" the object at lua stack index \p stackIndex to a C++
-     * type.
+     * @brief Get the parameter at lua stack index \p stackIndex and treat it as
+     * the given type.
      *
      * The type of the return value follows:
      * - Any primitive type is converted to type T.
      * - A <tt>const char*</tt> will return lua_tostring <b>without taking
      *   ownership of the string</b>.
-     * - A pointer will return a <tt>std::array<T></tt>. If lua_istable return
+     * - A pointer will return a <tt>std::array<T></tt>. If lua_istable returns
      *   true, then \p lua_len is used to determine how many times \p LuaGetFunc
      *   will be called, otherwise only the first index will be set. The size of
-     *   the array is always 4 .
-     * - A \p Placeholder will return a \p Placeholder and nothing will be
-     *   parsed. @see Placeholder.
-     * - A \p lua_State* will simply return the \p lua parameter and nothing
-     *   will be parsed.
+     *   the array is always 4.
+     * - A \p Placeholder will return a \p Placeholder without touching the
+     *   stack or \p stackIndex. @see Placeholder.
+     * - A \p lua_State* will return the \p lua parameter without touching the
+     *   stack or \p stackIndex
      * - A \p Variadic will convert parameters from \p stackIndex until
      *   \p lua_gettop is reached and return a \p Variadic<T>.
      *
@@ -143,38 +152,38 @@ namespace LuaRegister
      * @see GetDefault
      * @see LuaSetFunc
      *
-     * @tparam T The type to convert to. The type must have a LuaGetFunc and
-     * GetDefault specialization
+     * @tparam TargetType The type to treat the stack parameter as. The type
+     * must have a LuaGetFunc and GetDefault specialization
      * @param lua
      * @param stackIndex
      * @return auto See full description
      */
-    template<typename T>
+    template<typename TargetType>
     auto GetParameter(lua_State* lua, int& stackIndex)
     {
-        static_assert(!std::is_reference_v<T>);
+        static_assert(!std::is_reference_v<TargetType>);
 
-        if constexpr(is_variadic<T>::value)
+        if constexpr(is_variadic<TargetType>::value)
         {
-            auto var = Variadic<typename T::value_type>();
+            auto var = Variadic<typename TargetType::value_type>();
             // Eat the rest of the arguments. Nom nom nom
             var.count = std::min(lua_gettop(lua) - stackIndex + 1, MAX_VARIADIC_ARG_COUNT);
             for(int j = 0; stackIndex <= lua_gettop(lua); ++stackIndex, ++j)
-                var.arr.at(j) = LuaGetFunc<typename T::value_type>(lua, stackIndex);
+                var.arr.at(j) = LuaGetFunc<typename TargetType::value_type>(lua, stackIndex);
             return var;
         }
-        else if constexpr(std::is_same_v<T, lua_State*>)
+        else if constexpr(std::is_same_v<TargetType, lua_State*>)
         {
             return lua;
         }
-        else if constexpr(std::is_same_v<T, Placeholder>)
+        else if constexpr(std::is_same_v<TargetType, Placeholder>)
         {
             return Placeholder{.stackIndex = stackIndex++};
         }
-        else if constexpr(std::is_pointer_v<T> && !std::is_same_v<T, const char*>)
+        else if constexpr(std::is_pointer_v<TargetType> && !std::is_same_v<TargetType, const char*>)
         {
-            using NakedT = std::remove_const_t<std::remove_pointer_t<T>>;
-            auto arr = std::array<NakedT, 4>{GetDefault<NakedT>};
+            using NakedTargetType = std::remove_const_t<std::remove_pointer_t<TargetType>>;
+            auto arr = std::array<NakedTargetType, 4>{GetDefault<NakedTargetType>};
             if(stackIndex > lua_gettop(lua))
                 return arr;
 
@@ -190,12 +199,12 @@ namespace LuaRegister
                 for(int j = 1; j <= count; j++)
                 {
                     lua_geti(lua, stackIndex, j);
-                    arr[j - 1] = LuaGetFunc<NakedT>(lua, -1);
+                    arr[j - 1] = LuaGetFunc<NakedTargetType>(lua, -1);
                     lua_pop(lua, 1);
                 }
             }
             else
-                arr[0] = LuaGetFunc<NakedT>(lua, stackIndex);
+                arr[0] = LuaGetFunc<NakedTargetType>(lua, stackIndex);
 
             stackIndex++;
 
@@ -204,34 +213,11 @@ namespace LuaRegister
         else
         {
             // If there is some error here about LuaGetFunc it is because it isn't
-            // specialized for type T
-            return stackIndex <= lua_gettop(lua) ? (T)LuaGetFunc<T>(lua, stackIndex++)
-                                                 : GetDefault<T>;
+            // specialized for type TargetType
+            return stackIndex <= lua_gettop(lua)
+                       ? (TargetType)LuaGetFunc<TargetType>(lua, stackIndex++)
+                       : GetDefault<TargetType>;
         }
-    }
-
-    /**
-     * @brief Given a lua state with X parameters on the stack, convert
-     * parameters to the types of \p Arg and \p Args
-     *
-     * @tparam Arg
-     * @tparam Args
-     * @param state
-     * @param stackIndex
-     * @return std::tuple<Arg, Args...> @see GetParameter for possible types of
-     * \p Arg and \p Args
-     */
-    template<typename... Args>
-        requires(sizeof...(Args) > 0)
-    auto GetParameters(lua_State* state, int& stackIndex)
-    {
-        // Initializer list guarantees order of evaluation ?
-
-        // Since GetParameter isn't guaranteed to return the same type as a
-        // single argument, class template argument deduction is a lifesaver
-        // here!
-
-        return std::tuple{GetParameter<Args>(state, stackIndex)...};
     }
 
     template<typename ReturnType, typename T>
@@ -272,11 +258,21 @@ namespace LuaRegister
         (..., PushOneReturnValue<Types>(luaState, std::get<I>(tuple), I + 1, returnValueCount));
     }
 
-    template<typename... Types, typename... TupleTypes>
+    /**
+     * @brief Push the values in the given tuple to the lua stack if applicable
+     * to FuncTypes
+     *
+     * @tparam FuncTypes
+     * @tparam TupleTypes
+     * @param luaState
+     * @param tuple
+     * @return int
+     */
+    template<typename... FuncTypes, typename... TupleTypes>
     int PushReturnValues(lua_State* luaState, std::tuple<TupleTypes...>& tuple)
     {
         int returnValueCount = 0;
-        PushReturnValuesImpl<Types...>(
+        PushReturnValuesImpl<FuncTypes...>(
             luaState,
             tuple,
             std::make_index_sequence<std::tuple_size_v<std::tuple<TupleTypes...>>>{},
@@ -285,7 +281,7 @@ namespace LuaRegister
     }
 
     template<typename TargetType, typename T>
-    auto ReferenceValue(T& val)
+    auto ReferenceOneValue(T& val)
     {
         if constexpr(std::is_same_v<TargetType, lua_State*>)
             return val;
@@ -297,7 +293,7 @@ namespace LuaRegister
 
     // std::array is used by GetParameter and should be handled in a type-safe way
     template<typename TargetType, typename T, std::size_t Size>
-    auto ReferenceValue(std::array<T, Size>& val)
+    auto ReferenceOneValue(std::array<T, Size>& val)
     {
         if constexpr(std::is_pointer_v<TargetType> && !std::is_same_v<const char*, TargetType>)
             return val.data();
@@ -308,15 +304,24 @@ namespace LuaRegister
     template<typename... TargetTypes, typename... TupleTypes, std::size_t... I>
     auto ReferenceValuesImpl(std::tuple<TupleTypes...>& tuple, std::index_sequence<I...>)
     {
-        return std::tuple{ReferenceValue<TargetTypes>(std::get<I>(tuple))...};
+        return std::tuple{ReferenceOneValue<TargetTypes>(std::get<I>(tuple))...};
     }
 
-    template<typename... TargetTypes, typename... TupleTypes>
-    auto ReferenceValues(std::tuple<TupleTypes...>& tuple)
+    /**
+     * @brief Given a tuple with owned values, returns a new tuple where any
+     * pointer from \p TargetTypes points to the equivalent index in \p tuple
+     *
+     * @tparam TargetTypes
+     * @tparam OwnedTypes
+     * @param tuple
+     * @return auto
+     */
+    template<typename... TargetTypes, typename... OwnedTypes>
+    auto ReferenceValues(std::tuple<OwnedTypes...>& tuple)
     {
         return ReferenceValuesImpl<TargetTypes...>(
             tuple,
-            std::make_index_sequence<std::tuple_size_v<std::tuple<TupleTypes...>>>{});
+            std::make_index_sequence<std::tuple_size_v<std::tuple<OwnedTypes...>>>{});
     }
 
     /**
