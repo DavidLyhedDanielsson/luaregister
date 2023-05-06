@@ -1,10 +1,7 @@
 #pragma once
 
-// extern "C" {
-// #include <lua5.3/lauxlib.h>
-#include <lua5.3/lua.hpp>
-// #include <lualib.h>
-// }
+// Make sure to include lua before this file!
+// #include <lua.hpp>
 
 #include <array>
 #include <tuple>
