@@ -223,7 +223,9 @@ namespace LuaRegister
     {
         // Not a pointer or constant, then the value can't be changed by the
         // function
-        if constexpr(!std::is_pointer_v<ReturnType> || is_const_pointer_v<ReturnType>)
+        if constexpr(
+            !std::is_pointer_v<ReturnType> || is_const_pointer_v<ReturnType>
+            || std::is_same_v<ReturnType, lua_State*>)
             return;
         else
         {
